@@ -1,4 +1,4 @@
-📌 **Project Title:** **InstaFlow — Photo & Video Organize**  
+📌 **Project Title:** **InstaFlow — Photo & Video Organizer**  
 📅 **Project Timeline:** **December 2025 – Present [Active Development & Maintenance]**  
 🎥 YouTube Demo: TBD  
 📦 GitHub Source Code: <https://github.com/IvanSicaja/2025.12.26_RND_software_workflow--InstaFlow>  
