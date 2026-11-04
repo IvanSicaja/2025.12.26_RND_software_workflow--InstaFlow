@@ -298,6 +298,66 @@ class ZoomPanGraphicsView(QGraphicsView):
 
 
 class ImageSorterApp(QMainWindow):
+    # ── Theme palettes ────────────────────────────────────────────────
+    THEMES = {
+        'light': {
+            'name': 'Light',
+            'left_bg': '#f8f8f8',
+            'left_text': '#444',
+            'left_desc': '#666',
+            'left_input_bg': '#fff',
+            'left_input_border': '#ccc',
+            'left_input_text': '#222',
+            'left_input_disabled_bg': '#efefef',
+            'left_input_disabled_text': '#555',
+            'btn_bg': 'white',
+            'btn_border': '#aaa',
+            'btn_text': '#333',
+            'btn_hover_bg': '#f8f8f8',
+            'right_bg': 'transparent',
+            'source_bar_bg': '#2b2b2b',
+            'preview_bg': '#222',
+            'preview_border': '#444',
+            'thumb_bg': '#444',
+            'thumb_border': '#555',
+            'bar1_bg': '#1e1e1e',
+            'bar2_bg': '#2b2b2b',
+            'bar_text': '#ccc',
+            'bar_prefix': '#666',
+            'legend_icon_bg': '#f8f8f8',
+            'legend_icon_border': '#bbb',
+            'legend_text': '#555',
+        },
+        'dark': {
+            'name': 'Dark',
+            'left_bg': '#1a1a2e',
+            'left_text': '#c8c8d4',
+            'left_desc': '#8888a0',
+            'left_input_bg': '#252540',
+            'left_input_border': '#3a3a5c',
+            'left_input_text': '#d0d0e0',
+            'left_input_disabled_bg': '#1e1e34',
+            'left_input_disabled_text': '#7070a0',
+            'btn_bg': '#252540',
+            'btn_border': '#3a3a5c',
+            'btn_text': '#c8c8d4',
+            'btn_hover_bg': '#2e2e4a',
+            'right_bg': 'transparent',
+            'source_bar_bg': '#111122',
+            'preview_bg': '#0d0d1a',
+            'preview_border': '#2a2a44',
+            'thumb_bg': '#1a1a2e',
+            'thumb_border': '#2a2a44',
+            'bar1_bg': '#0d0d1a',
+            'bar2_bg': '#111122',
+            'bar_text': '#a0a0c0',
+            'bar_prefix': '#555580',
+            'legend_icon_bg': '#252540',
+            'legend_icon_border': '#3a3a5c',
+            'legend_text': '#8888a0',
+        },
+    }
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('InstaFlow')
@@ -313,7 +373,11 @@ class ImageSorterApp(QMainWindow):
         self._pix_cache = PixmapCache()   # background preloader
         self._loaded_subfolder_names: set[str] = set()  # names as of last "Load Existing Subfolders"
         self.settings = QSettings('ImageSorterApp', 'Settings')
+        self._current_theme = self.settings.value('theme', 'light')
+        if self._current_theme not in self.THEMES:
+            self._current_theme = 'light'
         self._build_ui()
+        self._apply_theme()
         self.update_mode_button_style()
 
     def _build_ui(self):
@@ -324,11 +388,11 @@ class ImageSorterApp(QMainWindow):
         root_layout.setSpacing(0)
 
         # LEFT PANEL - scrollable
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        left_scroll.setStyleSheet('QScrollArea { background-color: #f8f8f8; border: none; }')
+        self._left_scroll = QScrollArea()
+        self._left_scroll.setWidgetResizable(True)
+        self._left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._left_scroll.setStyleSheet('QScrollArea { background-color: #f8f8f8; border: none; }')
 
         left_content = QWidget()
         left_content.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
@@ -597,36 +661,51 @@ class ImageSorterApp(QMainWindow):
 
         left_panel.addSpacerItem(QSpacerItem(20, 40, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding))
 
-        left_scroll.setWidget(left_content)
-        left_scroll.setFixedWidth(360)
-        root_layout.addWidget(left_scroll)
+        # Theme toggle button — at the very bottom of the left panel
+        self.theme_toggle_btn = QPushButton('☾  Dark Theme')
+        self.theme_toggle_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.theme_toggle_btn.setFixedHeight(30)
+        self.theme_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: white; font-size: 9pt;
+                border: 2px solid #aaa; border-radius: 6px;
+                padding: 2px; color: #555;
+            }
+            QPushButton:hover { background-color: #f0f0f0; border-color: #888; }
+        """)
+        self.theme_toggle_btn.clicked.connect(self._toggle_theme)
+        left_panel.addWidget(self.theme_toggle_btn)
+
+        self._left_scroll.setWidget(left_content)
+        self._left_scroll.setFixedWidth(360)
+        root_layout.addWidget(self._left_scroll)
 
         # RIGHT PANEL
         right_panel = QVBoxLayout()
         right_panel.setContentsMargins(20, 10, 20, 10)
         right_panel.setSpacing(6)
 
-        source_bar = QWidget()
-        source_bar.setStyleSheet('background-color: #2b2b2b; border-radius: 0px;')
-        source_bar.setFixedHeight(28)
-        source_bar_layout = QHBoxLayout(source_bar)
+        self._source_bar = QWidget()
+        self._source_bar.setStyleSheet('background-color: #2b2b2b; border-radius: 0px;')
+        self._source_bar.setFixedHeight(28)
+        source_bar_layout = QHBoxLayout(self._source_bar)
         source_bar_layout.setContentsMargins(10, 0, 10, 0)
         source_bar_layout.setSpacing(6)
 
-        source_bar_icon = QLabel('\U0001f4c2')
-        source_bar_icon.setStyleSheet('color: #aaa; font-size: 10pt; background: transparent;')
-        source_bar_layout.addWidget(source_bar_icon)
+        self._source_bar_icon = QLabel('\U0001f4c2')
+        self._source_bar_icon.setStyleSheet('color: #aaa; font-size: 10pt; background: transparent;')
+        source_bar_layout.addWidget(self._source_bar_icon)
 
-        source_bar_prefix = QLabel('Source:')
-        source_bar_prefix.setStyleSheet('color: #888; font-size: 9pt; font-weight: bold; background: transparent;')
-        source_bar_layout.addWidget(source_bar_prefix)
+        self._source_bar_prefix = QLabel('Source:')
+        self._source_bar_prefix.setStyleSheet('color: #888; font-size: 9pt; font-weight: bold; background: transparent;')
+        source_bar_layout.addWidget(self._source_bar_prefix)
 
         self.source_folder_bar_label = QLabel('No folder selected \u2014 use Step 1 to open a folder')
         self.source_folder_bar_label.setStyleSheet('color: #ccc; font-size: 9pt; background: transparent;')
         self.source_folder_bar_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         source_bar_layout.addWidget(self.source_folder_bar_label, 1)
 
-        right_panel.addWidget(source_bar)
+        right_panel.addWidget(self._source_bar)
 
         # Main image wrapped in a container so we can overlay an op-notification in the top-right
         img_container = QWidget()
@@ -646,8 +725,52 @@ class ImageSorterApp(QMainWindow):
         img_container_layout.addWidget(self.op_overlay_label, 0, 0,
                                         alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
 
+        # Rotation buttons — bottom-left corner of the preview image (preview-only, never modifies file)
+        ROTATE_BTN_CSS = """
+            QPushButton {
+                background-color: rgba(40, 40, 40, 210);
+                color: #8cb4ff;
+                font-size: 9pt;
+                font-weight: bold;
+                border: 1px solid #5b8fd4;
+                border-radius: 5px;
+                padding: 2px 8px;
+            }
+            QPushButton:hover {
+                background-color: rgba(50, 80, 140, 230);
+                color: white;
+                border-color: white;
+            }
+        """
+        rotate_btns_widget = QWidget()
+        rotate_btns_widget.setStyleSheet('background: transparent;')
+        rotate_btns_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        rotate_btns_layout = QHBoxLayout(rotate_btns_widget)
+        rotate_btns_layout.setContentsMargins(6, 0, 0, 6)
+        rotate_btns_layout.setSpacing(4)
+
+        self.rotate_left_btn = QPushButton('↶  Ctrl+L')
+        self.rotate_left_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.rotate_left_btn.setFixedHeight(30)
+        self.rotate_left_btn.setStyleSheet(ROTATE_BTN_CSS)
+        self.rotate_left_btn.setToolTip('Rotate preview 90° left (Ctrl+L) — preview only, file is not changed')
+        self.rotate_left_btn.clicked.connect(lambda: self.main_image_view.rotate_view(-90))
+        rotate_btns_layout.addWidget(self.rotate_left_btn)
+
+        self.rotate_right_btn = QPushButton('↷  Ctrl+R')
+        self.rotate_right_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.rotate_right_btn.setFixedHeight(30)
+        self.rotate_right_btn.setStyleSheet(ROTATE_BTN_CSS)
+        self.rotate_right_btn.setToolTip('Rotate preview 90° right (Ctrl+R) — preview only, file is not changed')
+        self.rotate_right_btn.clicked.connect(lambda: self.main_image_view.rotate_view(90))
+        rotate_btns_layout.addWidget(self.rotate_right_btn)
+
+        rotate_btns_layout.addStretch()
+        img_container_layout.addWidget(rotate_btns_widget, 0, 0,
+                                        alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+
         # Delete button — bottom-right corner of the preview image
-        self.delete_btn = QPushButton('🗑  Delete  [D]')
+        self.delete_btn = QPushButton('\U0001f5d1  Delete  [D]')
         self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.delete_btn.setFixedHeight(30)
         self.delete_btn.setStyleSheet("""
@@ -694,39 +817,39 @@ class ImageSorterApp(QMainWindow):
         PREFIX_W   = 105  # wide enough for "Last operation:" at 9pt
 
         # Bar 1: currently displayed image name
-        cur_bar = QWidget()
-        cur_bar.setStyleSheet(BAR_STYLE.format(bg='#1e1e1e'))
-        cur_bar.setFixedHeight(26)
-        cur_bar_layout = QHBoxLayout(cur_bar)
+        self._cur_bar = QWidget()
+        self._cur_bar.setStyleSheet(BAR_STYLE.format(bg='#1e1e1e'))
+        self._cur_bar.setFixedHeight(26)
+        cur_bar_layout = QHBoxLayout(self._cur_bar)
         cur_bar_layout.setContentsMargins(10, 0, 10, 0)
         cur_bar_layout.setSpacing(0)
 
-        cur_bar_prefix = QLabel('Preview:')
-        cur_bar_prefix.setFixedWidth(PREFIX_W)
-        cur_bar_prefix.setStyleSheet('color: #666; font-size: 9pt; background: transparent;')
-        cur_bar_prefix.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        cur_bar_layout.addWidget(cur_bar_prefix)
+        self._cur_bar_prefix = QLabel('Preview:')
+        self._cur_bar_prefix.setFixedWidth(PREFIX_W)
+        self._cur_bar_prefix.setStyleSheet('color: #666; font-size: 9pt; background: transparent;')
+        self._cur_bar_prefix.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        cur_bar_layout.addWidget(self._cur_bar_prefix)
 
         self.current_image_name_label = QLabel('\u2014')
         self.current_image_name_label.setStyleSheet(TEXT_CSS)
         self.current_image_name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         cur_bar_layout.addWidget(self.current_image_name_label, 1)
 
-        right_panel.addWidget(cur_bar)
+        right_panel.addWidget(self._cur_bar)
 
         # Bar 2: last operation result
-        status_bar = QWidget()
-        status_bar.setStyleSheet(BAR_STYLE.format(bg='#2b2b2b'))
-        status_bar.setFixedHeight(26)
-        status_bar_layout = QHBoxLayout(status_bar)
+        self._status_bar = QWidget()
+        self._status_bar.setStyleSheet(BAR_STYLE.format(bg='#2b2b2b'))
+        self._status_bar.setFixedHeight(26)
+        status_bar_layout = QHBoxLayout(self._status_bar)
         status_bar_layout.setContentsMargins(10, 0, 10, 0)
         status_bar_layout.setSpacing(0)
 
-        op_prefix = QLabel('Last operation:')
-        op_prefix.setFixedWidth(PREFIX_W)
-        op_prefix.setStyleSheet('color: #666; font-size: 9pt; background: transparent;')
-        op_prefix.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        status_bar_layout.addWidget(op_prefix)
+        self._op_prefix = QLabel('Last operation:')
+        self._op_prefix.setFixedWidth(PREFIX_W)
+        self._op_prefix.setStyleSheet('color: #666; font-size: 9pt; background: transparent;')
+        self._op_prefix.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        status_bar_layout.addWidget(self._op_prefix)
 
         # filename → folder (stretches to fill)
         self.operation_status_label = QLabel('Ready \u2014 press a key (1\u20130, Q, W\u2026) to sort the current image')
@@ -743,13 +866,177 @@ class ImageSorterApp(QMainWindow):
         )
         status_bar_layout.addWidget(self.operation_badge_label)
 
-        right_panel.addWidget(status_bar)
+        right_panel.addWidget(self._status_bar)
 
-        right_container = QWidget()
-        right_container.setLayout(right_panel)
-        right_container.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        right_container.mousePressEvent = lambda e: right_container.setFocus()
-        root_layout.addWidget(right_container, 1)
+        self._right_container = QWidget()
+        self._right_container.setLayout(right_panel)
+        self._right_container.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._right_container.mousePressEvent = lambda e: self._right_container.setFocus()
+        root_layout.addWidget(self._right_container, 1)
+
+    # --- Theme methods ---
+
+    def _toggle_theme(self):
+        """Switch between light and dark theme."""
+        self._current_theme = 'dark' if self._current_theme == 'light' else 'light'
+        self.settings.setValue('theme', self._current_theme)
+        self._apply_theme()
+        self.update_mode_button_style()
+        self._update_create_folders_highlight()
+        self.centralWidget().setFocus()
+
+    def _apply_theme(self):
+        """Apply the current theme palette to all UI widgets."""
+        t = self.THEMES[self._current_theme]
+
+        # Theme toggle button text
+        if self._current_theme == 'light':
+            self.theme_toggle_btn.setText('☾  Dark Theme')
+        else:
+            self.theme_toggle_btn.setText('☀  Light Theme')
+
+        # Left panel scroll area background
+        self._left_scroll.setStyleSheet(
+            f'QScrollArea {{ background-color: {t["left_bg"]}; border: none; }}'
+        )
+
+        # Generic button style used by several left-panel buttons
+        BTN = f"""
+            QPushButton {{
+                background-color: {t['btn_bg']}; font-weight: bold; padding: 4px;
+                border: 2px solid {t['btn_border']}; border-radius: 6px;
+                color: {t['btn_text']};
+            }}
+            QPushButton:hover {{ background-color: {t['btn_hover_bg']}; }}
+        """
+        for btn in (self.open_btn, self.load_folders_btn, self.theme_toggle_btn):
+            btn.setStyleSheet(BTN.replace('font-weight: bold;', 'font-size: 9pt;')
+                              if btn is self.theme_toggle_btn else BTN)
+
+        # Add-row dashed button
+        self.add_row_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['btn_bg']}; font-size: 9.5pt;
+                border: 2px dashed {t['btn_border']}; border-radius: 6px;
+                padding: 2px; color: {t['legend_text']};
+            }}
+            QPushButton:hover {{ background-color: {t['btn_hover_bg']}; border-color: {t['btn_text']}; }}
+        """)
+
+        # Browse button for target folder
+        self.select_target_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {t['btn_bg']};
+                font-weight: bold; font-size: 11pt;
+                border: 2px solid {t['btn_border']};
+                border-radius: 8px; padding: 2px; color: {t['btn_text']};
+            }}
+            QPushButton:hover:enabled {{ background-color: {t['btn_hover_bg']}; }}
+            QPushButton:disabled {{ background-color: {t['left_input_disabled_bg']};
+                color: {t['left_input_disabled_text']}; border-color: {t['left_input_border']}; }}
+        """)
+
+        # Target folder text field
+        if self.use_source_checkbox.isChecked():
+            self.target_folder_display.setStyleSheet(f"""
+                QLineEdit {{
+                    padding: 5px; border-radius: 6px;
+                    border: 2px solid {t['left_input_border']}; background-color: {t['left_input_disabled_bg']};
+                    color: {t['left_input_disabled_text']}; font-size: 9pt;
+                }}
+            """)
+        else:
+            self.target_folder_display.setStyleSheet(f"""
+                QLineEdit {{
+                    padding: 5px; border-radius: 6px;
+                    border: 2px solid {t['btn_border']}; background-color: {t['left_input_bg']};
+                    color: {t['left_input_text']}; font-size: 9pt;
+                }}
+            """)
+
+        # Checkbox
+        self.use_source_checkbox.setStyleSheet(f"""
+            QCheckBox {{
+                color: {t['left_text']}; font-weight: bold;
+                font-size: 9.5pt; spacing: 6px;
+            }}
+            QCheckBox::indicator {{ width: 16px; height: 16px; }}
+        """)
+
+        # Step header labels (found via findChildren — all QLabels in the left scroll)
+        # We must replace BOTH light and dark colour values so toggling works repeatedly.
+        _LIGHT = self.THEMES['light']
+        _DARK  = self.THEMES['dark']
+        _color_map = {
+            'left_text': (_LIGHT['left_text'], _DARK['left_text']),
+            'left_desc': (_LIGHT['left_desc'], _DARK['left_desc']),
+            'legend_text': (_LIGHT['legend_text'], _DARK['legend_text']),
+            'bar_prefix': (_LIGHT['bar_prefix'], _DARK['bar_prefix']),
+        }
+        left_widget = self._left_scroll.widget()
+        if left_widget:
+            for lbl in left_widget.findChildren(QLabel):
+                ss = lbl.styleSheet()
+                for key, (lv, dv) in _color_map.items():
+                    if f'color: {lv}' in ss:
+                        lbl.setStyleSheet(ss.replace(f'color: {lv}', f'color: {t[key]}'))
+                        break
+                    elif f'color: {dv}' in ss:
+                        lbl.setStyleSheet(ss.replace(f'color: {dv}', f'color: {t[key]}'))
+                        break
+
+        # Source bar
+        self._source_bar.setStyleSheet(f'background-color: {t["source_bar_bg"]}; border-radius: 0px;')
+        self._source_bar_icon.setStyleSheet(f'color: #aaa; font-size: 10pt; background: transparent;')
+        self._source_bar_prefix.setStyleSheet(f'color: {t["bar_prefix"]}; font-size: 9pt; font-weight: bold; background: transparent;')
+        self.source_folder_bar_label.setStyleSheet(f'color: {t["bar_text"]}; font-size: 9pt; background: transparent;')
+
+        # Main image view background
+        self.main_image_view.setStyleSheet(
+            f'background-color: {t["preview_bg"]}; border: 2px solid {t["preview_border"]};'
+        )
+
+        # Thumbnail strip
+        for lbl in self.secondary_labels:
+            lbl.setStyleSheet(
+                f'background-color: {t["thumb_bg"]}; border: 1px solid {t["thumb_border"]}; border-radius: 6px;'
+            )
+
+        # Bottom info bars
+        self._cur_bar.setStyleSheet(f'background-color: {t["bar1_bg"]}; border-radius: 0px;')
+        self._cur_bar_prefix.setStyleSheet(f'color: {t["bar_prefix"]}; font-size: 9pt; background: transparent;')
+        self.current_image_name_label.setStyleSheet(f'color: {t["bar_text"]}; font-size: 9pt; background: transparent;')
+
+        self._status_bar.setStyleSheet(f'background-color: {t["bar2_bg"]}; border-radius: 0px;')
+        self._op_prefix.setStyleSheet(f'color: {t["bar_prefix"]}; font-size: 9pt; background: transparent;')
+        self.operation_status_label.setStyleSheet(f'color: {t["bar_text"]}; font-size: 9pt; background: transparent;')
+
+        # Right container background
+        self._right_container.setStyleSheet(f'background-color: {t["right_bg"]};')
+
+        # Folder row widgets: update ICON_BTN-style buttons & line-edits
+        _LIGHT = self.THEMES['light']
+        _DARK  = self.THEMES['dark']
+        for row_widget in self.folder_rows_widgets:
+            for btn in row_widget.findChildren(QPushButton):
+                ss = btn.styleSheet()
+                for old_bg in ('background: white', f'background: {_DARK["btn_bg"]}'):
+                    if old_bg in ss:
+                        ss = ss.replace(old_bg, f'background: {t["btn_bg"]}')
+                for old_border in ('border: 2px solid #aaa', f'border: 2px solid {_DARK["btn_border"]}'):
+                    if old_border in ss:
+                        ss = ss.replace(old_border, f'border: 2px solid {t["btn_border"]}')
+                for old_fg in ('color: #444', f'color: {_DARK["btn_text"]}'):
+                    if old_fg in ss:
+                        ss = ss.replace(old_fg, f'color: {t["btn_text"]}')
+                for old_hover in ('background-color: #f0f0f0', f'background-color: {_DARK["btn_hover_bg"]}'):
+                    if old_hover in ss:
+                        ss = ss.replace(old_hover, f'background-color: {t["btn_hover_bg"]}')
+                btn.setStyleSheet(ss)
+
+        # Refresh semantic-colored buttons (COPY/MOVE and Create Folders highlight)
+        self.update_mode_button_style()
+        self._update_create_folders_highlight()
 
     # --- Target folder methods ---
 
@@ -1211,15 +1498,18 @@ class ImageSorterApp(QMainWindow):
         name differs from what was loaded by 'Load Existing Subfolders'.
         Resets to normal when all names match the loaded set (or no names loaded).
         """
+        t = self.THEMES[self._current_theme]
+        normal_style = f"""
+            QPushButton {{
+                background-color: {t['btn_bg']}; font-weight: bold; padding: 4px;
+                border: 2px solid {t['btn_border']}; border-radius: 6px;
+                color: {t['btn_text']};
+            }}
+            QPushButton:hover {{ background-color: {t['btn_hover_bg']}; }}
+        """
+
         if not self._loaded_subfolder_names:
-            # Nothing was loaded — no highlight needed
-            self.create_folders_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: white; font-weight: bold; padding: 4px;
-                    border: 2px solid #aaa; border-radius: 6px;
-                }
-                QPushButton:hover { background-color: #f8f8f8; }
-            """)
+            self.create_folders_btn.setStyleSheet(normal_style)
             return
 
         current_names = {n for n in self.folder_saved_names if n.strip()}
@@ -1234,13 +1524,7 @@ class ImageSorterApp(QMainWindow):
                 QPushButton:hover { background-color: #fff0d0; }
             """)
         else:
-            self.create_folders_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: white; font-weight: bold; padding: 4px;
-                    border: 2px solid #aaa; border-radius: 6px;
-                }
-                QPushButton:hover { background-color: #f8f8f8; }
-            """)
+            self.create_folders_btn.setStyleSheet(normal_style)
 
     def open_folder(self):
         last_folder = self.settings.value('last_folder', '')
@@ -1439,14 +1723,17 @@ class ImageSorterApp(QMainWindow):
             super().keyPressEvent(event)
             return
 
-        # R = rotate preview 90° clockwise; Shift+R = 90° counter-clockwise (preview only, never saves)
-        if key == Qt.Key.Key_R.value:
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                self.main_image_view.rotate_view(-90)
-            else:
+        # Ctrl+R = rotate preview 90° clockwise (preview only, never modifies file)
+        # Ctrl+L = rotate preview 90° counter-clockwise
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if key == Qt.Key.Key_R.value:
                 self.main_image_view.rotate_view(90)
-            event.accept()
-            return
+                event.accept()
+                return
+            elif key == Qt.Key.Key_L.value:
+                self.main_image_view.rotate_view(-90)
+                event.accept()
+                return
 
         # D = delete current image
         if key == Qt.Key.Key_D.value:
