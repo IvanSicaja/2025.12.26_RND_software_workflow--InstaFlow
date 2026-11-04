@@ -9,10 +9,11 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QFileDialog, QHBoxLayout, QVBoxLayout, QGridLayout, QLineEdit,
-    QMessageBox, QSpacerItem, QSizePolicy, QScrollArea, QCheckBox
+    QMessageBox, QSpacerItem, QSizePolicy, QScrollArea, QCheckBox,
+    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 )
-from PyQt6.QtGui import QPixmap, QIcon, QImage
-from PyQt6.QtCore import Qt, QSettings, QTimer
+from PyQt6.QtGui import QPixmap, QIcon, QImage, QTransform, QPainter
+from PyQt6.QtCore import Qt, QSettings, QTimer, QRectF
 import rawpy          # pip install rawpy
 import numpy as np    # pip install numpy
 
@@ -192,6 +193,108 @@ class PixmapCache:
         with self._lock:
             self._cache.clear()
 
+
+
+class ZoomPanGraphicsView(QGraphicsView):
+    """
+    QGraphicsView subclass that supports:
+      - Mouse-wheel zoom centred on cursor position
+      - Click-and-drag panning
+      - Rotation (preview-only, never modifies the file)
+      - Double-click to reset (fit image in view)
+    """
+
+    _MIN_ZOOM = 0.05   # 5 % of original
+    _MAX_ZOOM = 50.0    # 5000 % of original
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
+        self._pixmap_item: QGraphicsPixmapItem | None = None
+        self._rotation = 0.0        # cumulative rotation degrees (preview only)
+
+        # Rendering quality
+        self.setRenderHints(
+            QPainter.RenderHint.Antialiasing |
+            QPainter.RenderHint.SmoothPixmapTransform
+        )
+
+        # Zoom anchors under the mouse cursor
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+
+        # Drag-to-pan
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+
+        # Visual style matching the old QLabel
+        self.setStyleSheet('background-color: #222; border: 2px solid #444;')
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    # ── public helpers ────────────────────────────────────────────────
+
+    def set_pixmap(self, pixmap: QPixmap):
+        """Display a new image, resetting zoom and rotation."""
+        self._rotation = 0.0
+        self._scene.clear()
+        if pixmap and not pixmap.isNull():
+            self._pixmap_item = self._scene.addPixmap(pixmap)
+            self._pixmap_item.setTransformationMode(
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.setSceneRect(QRectF(pixmap.rect()))
+            self.fit_in_view()
+        else:
+            self._pixmap_item = None
+
+    def fit_in_view(self):
+        """Reset zoom+rotation to fit the image inside the viewport."""
+        if self._pixmap_item is None:
+            return
+        self._rotation = 0.0
+        self.resetTransform()
+        self.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def rotate_view(self, degrees: float):
+        """Rotate the preview by the given degrees (cumulative). Never saves to file."""
+        self._rotation = (self._rotation + degrees) % 360
+        self.rotate(degrees)
+
+    def clear(self):
+        self._scene.clear()
+        self._pixmap_item = None
+        self._rotation = 0.0
+
+    # ── events ────────────────────────────────────────────────────────
+
+    def wheelEvent(self, event):
+        """Zoom in/out centred on the mouse cursor."""
+        if self._pixmap_item is None:
+            return
+        angle = event.angleDelta().y()
+        factor = 1.25 if angle > 0 else 1 / 1.25
+
+        # Guard against extreme zoom levels
+        current_scale = self.transform().m11()  # horizontal scale component
+        new_scale = current_scale * factor
+        if new_scale < self._MIN_ZOOM or new_scale > self._MAX_ZOOM:
+            return
+
+        self.scale(factor, factor)
+
+    def mouseDoubleClickEvent(self, event):
+        """Double-click → fit the image in the view (reset zoom+rotation)."""
+        self.fit_in_view()
+
+    def resizeEvent(self, event):
+        """Re-fit when the widget is resized (e.g. window resize), only if not user-zoomed."""
+        super().resizeEvent(event)
+        if self._pixmap_item is not None and self._rotation == 0.0:
+            # Always re-fit on resize so the image fills the view nicely.
+            # User zoom is transient per-image anyway (set_pixmap resets it).
+            self.resetTransform()
+            self.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
 
 
 class ImageSorterApp(QMainWindow):
@@ -532,10 +635,8 @@ class ImageSorterApp(QMainWindow):
         img_container_layout.setContentsMargins(0, 0, 0, 0)
         img_container_layout.setSpacing(0)
 
-        self.main_image_label = QLabel()
-        self.main_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.main_image_label.setStyleSheet('background-color: #222; border: 2px solid #444;')
-        img_container_layout.addWidget(self.main_image_label, 0, 0)  # fills entire cell
+        self.main_image_view = ZoomPanGraphicsView()
+        img_container_layout.addWidget(self.main_image_view, 0, 0)  # fills entire cell
 
         # Overlay label — top-right corner, shown briefly after each sort operation
         self.op_overlay_label = QLabel('')
@@ -1281,7 +1382,7 @@ class ImageSorterApp(QMainWindow):
 
     def update_previews(self):
         if not self.images:
-            self.main_image_label.clear()
+            self.main_image_view.clear()
             for lbl in self.secondary_labels:
                 lbl.clear()
             self.current_image_name_label.setText('\u2014')
@@ -1296,9 +1397,8 @@ class ImageSorterApp(QMainWindow):
         pix = self._pix_cache.get(img_path)
         if pix is None:
             pix = load_pixmap(img_path)
-        self.main_image_label.setPixmap(pix.scaled(
-            self.main_image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        ))
+        # Display via QGraphicsView \u2014 supports zoom, pan, rotate
+        self.main_image_view.set_pixmap(pix)
 
         offsets = [-2, -1, 0, 1, 2]
         for lbl, off in zip(self.secondary_labels, offsets):
@@ -1337,6 +1437,15 @@ class ImageSorterApp(QMainWindow):
 
         if isinstance(self.focusWidget(), QLineEdit):
             super().keyPressEvent(event)
+            return
+
+        # R = rotate preview 90° clockwise; Shift+R = 90° counter-clockwise (preview only, never saves)
+        if key == Qt.Key.Key_R.value:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self.main_image_view.rotate_view(-90)
+            else:
+                self.main_image_view.rotate_view(90)
+            event.accept()
             return
 
         # D = delete current image
